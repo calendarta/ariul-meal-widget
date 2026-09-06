@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>군산아리울초 오늘의 급식</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--card:#fff;--text:#171717;--muted:#78716c;--line:#e7e5e4;--accent:#16a34a;--soft:#f0fdf4;--btn:#fafaf9}
+@media(prefers-color-scheme:dark){:root{--bg:#191919;--card:#202020;--text:#f5f5f4;--muted:#a8a29e;--line:#3f3f46;--accent:#4ade80;--soft:#14261a;--btn:#292929}}
+*{box-sizing:border-box}
+body{margin:0;background:transparent;color:var(--text);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:2px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:24px 26px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.top{display:flex;gap:14px;align-items:flex-start}.emoji{font-size:28px;line-height:1}.title{font-size:24px;font-weight:800;letter-spacing:-.02em}.dateLine{margin-top:6px;font-size:15px;color:var(--muted)}
+.body{margin-top:22px}.meal{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:start}.menu{font-size:18px;line-height:1.85;font-weight:650;word-break:keep-all}.kcal{background:var(--soft);color:var(--accent);font-size:14px;font-weight:800;border-radius:999px;padding:8px 12px;white-space:nowrap}
+.empty{color:var(--muted);font-size:17px;padding:8px 0 18px}.error{color:#dc2626;font-size:15px;line-height:1.55;background:#fef2f2;border-radius:12px;padding:12px 14px}.loading{height:80px;display:flex;align-items:center;color:var(--muted);font-size:16px}
+.controls{margin-top:22px;display:grid;grid-template-columns:44px 70px 1fr 44px;gap:10px}.btn,.dateInput{height:48px;border:1px solid var(--line);border-radius:12px;background:var(--btn);color:var(--text);font:inherit}.btn{cursor:pointer;font-weight:750;font-size:16px}.dateInput{padding:0 14px;font-weight:650;font-size:16px}.source{margin-top:10px;color:var(--muted);font-size:12px;text-align:right}
+@media(max-width:560px){.card{padding:20px}.title{font-size:21px}.meal{grid-template-columns:1fr}.menu{font-size:17px}.kcal{justify-self:start}.controls{grid-template-columns:42px 64px 1fr 42px;gap:7px}.dateInput{min-width:0;padding:0 8px;font-size:14px}}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card">
+  <div class="top"><div class="emoji">🍱</div><div><div class="title">군산아리울초 오늘의 급식</div><div class="dateLine" id="dateLine"></div></div></div>
+  <div class="body" id="body"><div class="loading">급식 정보를 불러오는 중입니다…</div></div>
+  <div class="controls">
+    <button class="btn" id="prev" aria-label="이전 날짜">‹</button>
+    <button class="btn" id="today">오늘</button>
+    <input class="dateInput" id="date" type="date" />
+    <button class="btn" id="next" aria-label="다음 날짜">›</button>
+  </div>
+  <div class="source">NEIS 교육정보 개방포털 급식식단정보</div>
+</div></div>
+<script>
+const el={body:document.getElementById('body'),date:document.getElementById('date'),dateLine:document.getElementById('dateLine')};
+const pad=n=>String(n).padStart(2,'0');
+const formatDate=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const koreanDate=s=>{const [y,m,d]=s.split('-').map(Number);const dt=new Date(y,m-1,d);return `${y}년 ${m}월 ${d}일 ${['일','월','화','수','목','금','토'][dt.getDay()]}요일`};
+const shift=(s,n)=>{const [y,m,d]=s.split('-').map(Number);const dt=new Date(y,m-1,d);dt.setDate(dt.getDate()+n);return formatDate(dt)};
+async function load(date){
+  el.date.value=date; el.dateLine.textContent=koreanDate(date); el.body.innerHTML='<div class="loading">급식 정보를 불러오는 중입니다…</div>';
+  try{
+    const res=await fetch(`/api/meal?date=${date.replaceAll('-','')}`,{cache:'no-store'});
+    const data=await res.json();
+    if(!res.ok) throw new Error(data.error||`HTTP ${res.status}`);
+    if(!data.meal){
+      const msg=data.result?.MESSAGE ? `🍽️ ${data.result.MESSAGE}` : '🍽️ 등록된 급식이 없습니다.';
+      el.body.innerHTML=`<div class="empty">${msg}</div>`;
+      return;
+    }
+    const dishes=data.meal.dishes.map(item=>`<div>${item}</div>`).join('');
+    const kcal=data.meal.calories?`<div class="kcal">🔥 ${data.meal.calories}</div>`:'';
+    el.body.innerHTML=`<div class="meal"><div class="menu">${dishes}</div>${kcal}</div>`;
+  }catch(err){
+    el.body.innerHTML=`<div class="error"><b>급식 정보를 불러오지 못했습니다.</b><br>${String(err.message||err)}</div>`;
+  }
+}
+const today=()=>formatDate(new Date());
+document.getElementById('prev').onclick=()=>load(shift(el.date.value,-1));
+document.getElementById('next').onclick=()=>load(shift(el.date.value,1));
+document.getElementById('today').onclick=()=>load(today());
+el.date.onchange=()=>el.date.value&&load(el.date.value);
+load(today());
+</script>
+</body>
+</html>
