@@ -1,65 +1,537 @@
 <!doctype html>
 <html lang="ko">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>군산아리울초 오늘의 급식</title>
-<style>
-:root{color-scheme:light dark;--bg:#fff;--card:#fff;--text:#171717;--muted:#78716c;--line:#e7e5e4;--accent:#16a34a;--soft:#f0fdf4;--btn:#fafaf9}
-@media(prefers-color-scheme:dark){:root{--bg:#191919;--card:#202020;--text:#f5f5f4;--muted:#a8a29e;--line:#3f3f46;--accent:#4ade80;--soft:#14261a;--btn:#292929}}
-*{box-sizing:border-box}
-body{margin:0;background:transparent;color:var(--text);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",sans-serif}
-.wrap{max-width:900px;margin:0 auto;padding:2px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:24px 26px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
-.top{display:flex;gap:14px;align-items:flex-start}.emoji{font-size:28px;line-height:1}.title{font-size:24px;font-weight:800;letter-spacing:-.02em}.dateLine{margin-top:6px;font-size:15px;color:var(--muted)}
-.body{margin-top:22px}.meal{display:grid;grid-template-columns:1fr auto;gap:20px;align-items:start}.menu{font-size:18px;line-height:1.85;font-weight:650;word-break:keep-all}.kcal{background:var(--soft);color:var(--accent);font-size:14px;font-weight:800;border-radius:999px;padding:8px 12px;white-space:nowrap}
-.empty{color:var(--muted);font-size:17px;padding:8px 0 18px}.error{color:#dc2626;font-size:15px;line-height:1.55;background:#fef2f2;border-radius:12px;padding:12px 14px}.loading{height:80px;display:flex;align-items:center;color:var(--muted);font-size:16px}
-.controls{margin-top:22px;display:grid;grid-template-columns:44px 70px 1fr 44px;gap:10px}.btn,.dateInput{height:48px;border:1px solid var(--line);border-radius:12px;background:var(--btn);color:var(--text);font:inherit}.btn{cursor:pointer;font-weight:750;font-size:16px}.dateInput{padding:0 14px;font-weight:650;font-size:16px}.source{margin-top:10px;color:var(--muted);font-size:12px;text-align:right}
-@media(max-width:560px){.card{padding:20px}.title{font-size:21px}.meal{grid-template-columns:1fr}.menu{font-size:17px}.kcal{justify-self:start}.controls{grid-template-columns:42px 64px 1fr 42px;gap:7px}.dateInput{min-width:0;padding:0 8px;font-size:14px}}
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>군산아리울초 오늘의 급식</title>
+  <style>
+    :root{
+      color-scheme: light dark;
+      --bg: transparent;
+      --card: #ffffff;
+      --text: #191919;
+      --sub: #6b7280;
+      --line: #e5e7eb;
+      --soft: #f7f7f5;
+      --accent: #16a34a;
+      --accent-soft: #ecfdf3;
+      --chip: #f3f4f6;
+      --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.04);
+      --danger-bg: #fef2f2;
+      --danger-text: #b91c1c;
+    }
+
+    @media (prefers-color-scheme: dark){
+      :root{
+        --card: #1f1f1f;
+        --text: #f5f5f5;
+        --sub: #b0b3b8;
+        --line: #383838;
+        --soft: #262626;
+        --accent: #4ade80;
+        --accent-soft: #15301f;
+        --chip: #2c2c2c;
+        --shadow: none;
+        --danger-bg: #3a1d1d;
+        --danger-text: #fca5a5;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    body{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family:
+        "Pretendard Variable",
+        "Pretendard",
+        "Noto Sans KR",
+        "Apple SD Gothic Neo",
+        "Malgun Gothic",
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    }
+
+    .wrap{
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 6px;
+    }
+
+    .card{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .top{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .title-wrap{ min-width: 0; }
+
+    .title-row{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .icon{
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      flex: 0 0 auto;
+    }
+
+    .title{
+      font-size: 23px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    .sub{
+      margin-top: 6px;
+      color: var(--sub);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .badges{
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .badge{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--chip);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge.accent{
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: transparent;
+    }
+
+    .section{
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+    }
+
+    .section-title{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .section-title h2{
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .kcal{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .menu-list{
+      display: grid;
+      gap: 8px;
+    }
+
+    .menu-item{
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .menu-bullet{
+      margin-top: 8px;
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--accent);
+      flex: 0 0 auto;
+    }
+
+    .empty{
+      background: var(--soft);
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      padding: 18px 14px;
+      text-align: center;
+      color: var(--sub);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .error{
+      background: var(--danger-bg);
+      color: var(--danger-text);
+      border-radius: 14px;
+      padding: 14px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .loading{
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px 14px;
+      color: var(--sub);
+      text-align: center;
+      font-size: 15px;
+    }
+
+    .controls{
+      margin-top: 14px;
+      display: grid;
+      grid-template-columns: 44px 60px 1fr 44px;
+      gap: 8px;
+    }
+
+    .btn,
+    .date-input{
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+    }
+
+    .btn{
+      cursor: pointer;
+      font-weight: 800;
+      font-size: 15px;
+    }
+
+    .btn:hover{ background: var(--soft); }
+    .btn.today{ background: var(--soft); }
+
+    .date-input{
+      width: 100%;
+      padding: 0 12px;
+      font-weight: 700;
+    }
+
+    .extra{
+      margin-top: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    details{
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      overflow: hidden;
+    }
+
+    summary{
+      list-style: none;
+      cursor: pointer;
+      padding: 12px 14px;
+      font-size: 14px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    summary::-webkit-details-marker{ display: none; }
+
+    .summary-right{
+      color: var(--sub);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .detail-body{
+      border-top: 1px solid var(--line);
+      padding: 12px 14px 14px;
+      background: var(--soft);
+    }
+
+    .detail-list{
+      display: grid;
+      gap: 8px;
+    }
+
+    .detail-item{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--text);
+    }
+
+    .foot{
+      margin-top: 10px;
+      color: var(--sub);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    @media (max-width: 640px){
+      .card{ padding: 14px; border-radius: 16px; }
+      .top{ flex-direction: column; align-items: stretch; }
+      .badges{ justify-content: flex-start; }
+      .title{ font-size: 20px; }
+      .controls{ grid-template-columns: 40px 56px 1fr 40px; }
+      .btn,.date-input{ height: 42px; }
+    }
+  </style>
 </head>
 <body>
-<div class="wrap"><div class="card">
-  <div class="top"><div class="emoji">🍱</div><div><div class="title">군산아리울초 오늘의 급식</div><div class="dateLine" id="dateLine"></div></div></div>
-  <div class="body" id="body"><div class="loading">급식 정보를 불러오는 중입니다…</div></div>
-  <div class="controls">
-    <button class="btn" id="prev" aria-label="이전 날짜">‹</button>
-    <button class="btn" id="today">오늘</button>
-    <input class="dateInput" id="date" type="date" />
-    <button class="btn" id="next" aria-label="다음 날짜">›</button>
+  <div class="wrap">
+    <div class="card">
+      <div class="top">
+        <div class="title-wrap">
+          <div class="title-row">
+            <div class="icon">🍱</div>
+            <div class="title">군산아리울초 오늘의 급식</div>
+          </div>
+          <div class="sub" id="dateLine">날짜를 불러오는 중입니다…</div>
+        </div>
+
+        <div class="badges">
+          <div class="badge accent" id="mealTypeBadge">중식</div>
+          <div class="badge" id="schoolBadge">군산아리울초등학교</div>
+        </div>
+      </div>
+
+      <div id="body">
+        <div class="loading">급식 정보를 불러오는 중입니다…</div>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="prev" aria-label="이전 날짜">‹</button>
+        <button class="btn today" id="today">오늘</button>
+        <input class="date-input" id="date" type="date" />
+        <button class="btn" id="next" aria-label="다음 날짜">›</button>
+      </div>
+
+      <div class="foot">NEIS 교육정보 개방포털 급식식단정보</div>
+    </div>
   </div>
-  <div class="source">NEIS 교육정보 개방포털 급식식단정보</div>
-</div></div>
-<script>
-const el={body:document.getElementById('body'),date:document.getElementById('date'),dateLine:document.getElementById('dateLine')};
-const pad=n=>String(n).padStart(2,'0');
-const formatDate=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-const koreanDate=s=>{const [y,m,d]=s.split('-').map(Number);const dt=new Date(y,m-1,d);return `${y}년 ${m}월 ${d}일 ${['일','월','화','수','목','금','토'][dt.getDay()]}요일`};
-const shift=(s,n)=>{const [y,m,d]=s.split('-').map(Number);const dt=new Date(y,m-1,d);dt.setDate(dt.getDate()+n);return formatDate(dt)};
-async function load(date){
-  el.date.value=date; el.dateLine.textContent=koreanDate(date); el.body.innerHTML='<div class="loading">급식 정보를 불러오는 중입니다…</div>';
-  try{
-    const res=await fetch(`/api/meal?date=${date.replaceAll('-','')}`,{cache:'no-store'});
-    const data=await res.json();
-    if(!res.ok) throw new Error(data.error||`HTTP ${res.status}`);
-    if(!data.meal){
-      const msg=data.result?.MESSAGE ? `🍽️ ${data.result.MESSAGE}` : '🍽️ 등록된 급식이 없습니다.';
-      el.body.innerHTML=`<div class="empty">${msg}</div>`;
-      return;
+
+  <script>
+    const el = {
+      body: document.getElementById('body'),
+      date: document.getElementById('date'),
+      dateLine: document.getElementById('dateLine'),
+      mealTypeBadge: document.getElementById('mealTypeBadge'),
+      schoolBadge: document.getElementById('schoolBadge')
+    };
+
+    const pad = (n) => String(n).padStart(2, '0');
+
+    const formatDate = (d) =>
+      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+    const koreanDate = (value) => {
+      const [y, m, d] = value.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
+      return `${y}년 ${m}월 ${d}일 ${dayNames[dt.getDay()]}요일`;
+    };
+
+    const shiftDate = (value, amount) => {
+      const [y, m, d] = value.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      dt.setDate(dt.getDate() + amount);
+      return formatDate(dt);
+    };
+
+    function makeList(items = []) {
+      return items.map(item => `
+        <div class="detail-item">${escapeHtml(item)}</div>
+      `).join('');
     }
-    const dishes=data.meal.dishes.map(item=>`<div>${item}</div>`).join('');
-    const kcal=data.meal.calories?`<div class="kcal">🔥 ${data.meal.calories}</div>`:'';
-    el.body.innerHTML=`<div class="meal"><div class="menu">${dishes}</div>${kcal}</div>`;
-  }catch(err){
-    el.body.innerHTML=`<div class="error"><b>급식 정보를 불러오지 못했습니다.</b><br>${String(err.message||err)}</div>`;
-  }
-}
-const today=()=>formatDate(new Date());
-document.getElementById('prev').onclick=()=>load(shift(el.date.value,-1));
-document.getElementById('next').onclick=()=>load(shift(el.date.value,1));
-document.getElementById('today').onclick=()=>load(today());
-el.date.onchange=()=>el.date.value&&load(el.date.value);
-load(today());
-</script>
+
+    function escapeHtml(str = '') {
+      return String(str)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function renderMeal(data) {
+      const meal = data.meal;
+      const dishes = (meal.dishes || []).map(item => `
+        <div class="menu-item">
+          <span class="menu-bullet"></span>
+          <span>${escapeHtml(item)}</span>
+        </div>
+      `).join('');
+
+      const nutrients = meal.nutrients?.length
+        ? `
+          <details>
+            <summary>
+              <span>영양정보</span>
+              <span class="summary-right">펼쳐 보기</span>
+            </summary>
+            <div class="detail-body">
+              <div class="detail-list">
+                ${makeList(meal.nutrients)}
+              </div>
+            </div>
+          </details>
+        `
+        : '';
+
+      const origin = meal.origin?.length
+        ? `
+          <details>
+            <summary>
+              <span>원산지 정보</span>
+              <span class="summary-right">펼쳐 보기</span>
+            </summary>
+            <div class="detail-body">
+              <div class="detail-list">
+                ${makeList(meal.origin)}
+              </div>
+            </div>
+          </details>
+        `
+        : '';
+
+      el.body.innerHTML = `
+        <div class="section">
+          <div class="section-title">
+            <h2>오늘의 메뉴</h2>
+            ${meal.calories ? `<div class="kcal">🔥 ${escapeHtml(meal.calories)}</div>` : ''}
+          </div>
+          <div class="menu-list">
+            ${dishes}
+          </div>
+        </div>
+
+        <div class="extra">
+          ${nutrients}
+          ${origin}
+        </div>
+      `;
+    }
+
+    function renderEmpty(message = '등록된 급식이 없습니다.') {
+      el.body.innerHTML = `
+        <div class="empty">
+          🍽️ ${escapeHtml(message)}
+        </div>
+      `;
+    }
+
+    function renderError(message) {
+      el.body.innerHTML = `
+        <div class="error">
+          <strong>급식 정보를 불러오지 못했습니다.</strong><br />
+          ${escapeHtml(message)}
+        </div>
+      `;
+    }
+
+    async function load(date) {
+      el.date.value = date;
+      el.dateLine.textContent = koreanDate(date);
+      el.body.innerHTML = `<div class="loading">급식 정보를 불러오는 중입니다…</div>`;
+
+      try {
+        const res = await fetch(`/api/meal?date=${date.replaceAll('-', '')}`, {
+          cache: 'no-store'
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+
+        if (data.school) {
+          el.schoolBadge.textContent = data.school;
+        }
+
+        if (data.meal?.type) {
+          el.mealTypeBadge.textContent = data.meal.type;
+        } else {
+          el.mealTypeBadge.textContent = '중식';
+        }
+
+        if (!data.meal) {
+          const msg = data.result?.MESSAGE || '등록된 급식이 없습니다.';
+          renderEmpty(msg);
+          return;
+        }
+
+        renderMeal(data);
+      } catch (err) {
+        renderError(err.message || '알 수 없는 오류가 발생했습니다.');
+      }
+    }
+
+    const today = () => formatDate(new Date());
+
+    document.getElementById('prev').onclick = () => load(shiftDate(el.date.value, -1));
+    document.getElementById('next').onclick = () => load(shiftDate(el.date.value, 1));
+    document.getElementById('today').onclick = () => load(today());
+    el.date.onchange = () => el.date.value && load(el.date.value);
+
+    load(today());
+  </script>
 </body>
 </html>
