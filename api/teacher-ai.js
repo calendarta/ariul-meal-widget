@@ -1,18 +1,32 @@
 const STATIC_KB = require('../data/teacher-kb');
-const SOURCES = require('../data/teacher-sources');
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-luna';
-const MAX_DOCS = 4;
+const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID || '3c9a0cff-dadd-8091-b962-caa4ac112d53';
 const NOTION_VERSION = '2022-06-28';
 const NOTION_REFRESH_MS = 60 * 1000;
+const MAX_DOCS = 6;
+const MAX_PAGES = 160;
+const MAX_DEPTH = 10;
+const CHUNK_SIZE = 2600;
+const CHUNK_OVERLAP = 280;
 
 const STOPWORDS = new Set([
-  '그리고','그런데','그러면','어떻게','어디서','언제','무엇','뭐','관련','학교','선생님','교사','학생','우리','아리울초','군산아리울초','되나요','하나요','인가요','있나요','알려줘','알려주세요'
+  '그리고','그런데','그러면','어떻게','어디서','언제','무엇','뭐','관련','학교','선생님','교사','학생','우리','아리울초','군산아리울초','되나요','하나요','인가요','있나요','알려줘','알려주세요','해주세요','합니다','입니다'
 ]);
 
-const notionCache = globalThis.__ARIUL_NOTION_CACHE__ || new Map();
-globalThis.__ARIUL_NOTION_CACHE__ = notionCache;
-let lastRefreshAt = globalThis.__ARIUL_NOTION_REFRESH_AT__ || 0;
+const DEFAULT_DENY_TITLE_PATTERNS = [
+  '비밀번호',
+  '개인정보',
+  '인증서'
+];
+
+const state = globalThis.__ARIUL_NOTION_INDEX__ || {
+  chunks: [],
+  pages: [],
+  refreshedAt: 0,
+  syncError: null
+};
+globalThis.__ARIUL_NOTION_INDEX__ = state;
 
 function normalize(text = '') {
   return String(text)
@@ -28,38 +42,8 @@ function tokens(text = '') {
     .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
 }
 
-function scoreDoc(question, doc) {
-  const q = normalize(question);
-  const qTokens = tokens(question);
-  const haystack = normalize(`${doc.title} ${(doc.keywords || []).join(' ')} ${doc.text}`);
-  let score = 0;
-
-  for (const keyword of doc.keywords || []) {
-    const k = normalize(keyword);
-    if (k && q.includes(k)) score += 9;
-  }
-
-  for (const token of qTokens) {
-    if (haystack.includes(token)) score += token.length >= 4 ? 4 : 2;
-  }
-
-  if (q.includes(normalize(doc.title))) score += 12;
-  return score;
-}
-
-function retrieve(question, kb) {
-  return kb
-    .map((doc) => ({ ...doc, score: scoreDoc(question, doc) }))
-    .filter((doc) => doc.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_DOCS);
-}
-
 function extractOutputText(data) {
-  if (typeof data?.output_text === 'string' && data.output_text.trim()) {
-    return data.output_text.trim();
-  }
-
+  if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
   const texts = [];
   for (const item of data?.output || []) {
     for (const content of item?.content || []) {
@@ -70,21 +54,38 @@ function extractOutputText(data) {
 }
 
 function richTextToPlain(rich = []) {
-  return rich.map((r) => r?.plain_text || '').join('');
+  return rich.map((r) => r?.plain_text || r?.text?.content || '').join('');
+}
+
+function getPageTitle(page) {
+  for (const prop of Object.values(page?.properties || {})) {
+    if (prop?.type === 'title') {
+      const title = richTextToPlain(prop.title || []).trim();
+      if (title) return title;
+    }
+  }
+  return '제목 없음';
+}
+
+function getDatabaseTitle(database) {
+  return richTextToPlain(database?.title || []).trim() || '데이터베이스';
 }
 
 function blockToText(block) {
   const type = block?.type;
   const data = block?.[type] || {};
 
-  if (type === 'child_page') return `하위 페이지: ${data.title || ''}`;
-  if (type === 'table_row') {
-    return (data.cells || []).map((cell) => richTextToPlain(cell)).join(' | ');
+  if (type === 'child_page' || type === 'child_database') return '';
+  if (type === 'divider') return '---';
+  if (type === 'table_row') return (data.cells || []).map((cell) => richTextToPlain(cell)).join(' | ');
+  if (type === 'bookmark' || type === 'link_preview') return data.url ? `링크: ${data.url}` : '';
+  if (type === 'file' || type === 'pdf' || type === 'image' || type === 'video' || type === 'audio') {
+    const caption = richTextToPlain(data.caption || []);
+    return caption ? `첨부자료: ${caption}` : '';
   }
 
   const text = richTextToPlain(data.rich_text || []);
   if (!text) return '';
-
   if (type === 'heading_1') return `# ${text}`;
   if (type === 'heading_2') return `## ${text}`;
   if (type === 'heading_3') return `### ${text}`;
@@ -92,20 +93,20 @@ function blockToText(block) {
   if (type === 'numbered_list_item') return `- ${text}`;
   if (type === 'to_do') return `- ${data.checked ? '[완료]' : '[ ]'} ${text}`;
   if (type === 'quote') return `> ${text}`;
-  if (type === 'callout') return `주의/안내: ${text}`;
-  if (type === 'toggle') return `${text}`;
+  if (type === 'callout') return `안내: ${text}`;
   return text;
 }
 
-async function notionFetch(path, token) {
+async function notionRequest(path, token, options = {}) {
   const response = await fetch(`https://api.notion.com/v1${path}`, {
+    method: options.method || 'GET',
     headers: {
       Authorization: `Bearer ${token}`,
       'Notion-Version': NOTION_VERSION,
       'Content-Type': 'application/json'
-    }
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
   });
-
   const data = await response.json();
   if (!response.ok) {
     const err = new Error(data?.message || `Notion API 오류 (${response.status})`);
@@ -115,98 +116,322 @@ async function notionFetch(path, token) {
   return data;
 }
 
-async function fetchBlockText(blockId, token, depth = 0) {
-  if (depth > 5) return '';
+function envList(name) {
+  return String(process.env[name] || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
 
+function buildDenyRules() {
+  return {
+    ids: new Set(envList('NOTION_AI_DENY_PAGE_IDS').map((x) => x.replace(/-/g, '').toLowerCase())),
+    titles: [...DEFAULT_DENY_TITLE_PATTERNS, ...envList('NOTION_AI_DENY_TITLES')].map(normalize)
+  };
+}
+
+function isDenied(id, title, rules) {
+  const normalizedId = String(id || '').replace(/-/g, '').toLowerCase();
+  if (rules.ids.has(normalizedId)) return true;
+  const t = normalize(title);
+  return rules.titles.some((pattern) => pattern && t.includes(pattern));
+}
+
+async function listBlockChildren(blockId, token) {
+  const results = [];
   let cursor = null;
-  const lines = [];
-
   do {
     const qs = new URLSearchParams({ page_size: '100' });
     if (cursor) qs.set('start_cursor', cursor);
-    const data = await notionFetch(`/blocks/${blockId}/children?${qs.toString()}`, token);
-
-    for (const block of data.results || []) {
-      const line = blockToText(block);
-      if (line) lines.push(line);
-      if (block.has_children) {
-        const childText = await fetchBlockText(block.id, token, depth + 1);
-        if (childText) lines.push(childText);
-      }
-    }
-
+    const data = await notionRequest(`/blocks/${blockId}/children?${qs.toString()}`, token);
+    results.push(...(data.results || []));
     cursor = data.has_more ? data.next_cursor : null;
   } while (cursor);
-
-  return lines.join('\n');
+  return results;
 }
 
-async function refreshNotionKB(token) {
-  const now = Date.now();
-  if (now - lastRefreshAt < NOTION_REFRESH_MS && notionCache.size) {
-    return SOURCES.map((source) => notionCache.get(source.id)).filter(Boolean);
+async function collectBlockContent(blockId, token, depth = 0) {
+  if (depth > MAX_DEPTH) return { text: '', childPages: [], childDatabases: [] };
+  const lines = [];
+  const childPages = [];
+  const childDatabases = [];
+  const blocks = await listBlockChildren(blockId, token);
+
+  for (const block of blocks) {
+    if (block.type === 'child_page') {
+      childPages.push({ id: block.id, title: block.child_page?.title || '' });
+      continue;
+    }
+    if (block.type === 'child_database') {
+      childDatabases.push({ id: block.id, title: block.child_database?.title || '' });
+      continue;
+    }
+
+    const line = blockToText(block);
+    if (line) lines.push(line);
+
+    if (block.has_children) {
+      const nested = await collectBlockContent(block.id, token, depth + 1);
+      if (nested.text) lines.push(nested.text);
+      childPages.push(...nested.childPages);
+      childDatabases.push(...nested.childDatabases);
+    }
   }
 
-  const docs = await Promise.all(SOURCES.map(async (source) => {
-    try {
-      const page = await notionFetch(`/pages/${source.pageId}`, token);
-      const lastEdited = page.last_edited_time || '';
-      const cached = notionCache.get(source.id);
-
-      if (cached && cached.lastEdited === lastEdited) return cached;
-
-      const text = await fetchBlockText(source.pageId, token);
-      const doc = {
-        ...source,
-        text,
-        lastEdited,
-        live: true
-      };
-      notionCache.set(source.id, doc);
-      return doc;
-    } catch (error) {
-      console.error(`Notion sync failed: ${source.title}`, error.message);
-      const cached = notionCache.get(source.id);
-      if (cached) return cached;
-      const fallback = STATIC_KB.find((d) => d.id === source.id);
-      return fallback ? { ...fallback, live: false } : null;
-    }
-  }));
-
-  lastRefreshAt = now;
-  globalThis.__ARIUL_NOTION_REFRESH_AT__ = now;
-  return docs.filter(Boolean);
+  return { text: lines.join('\n'), childPages, childDatabases };
 }
 
-async function getKnowledgeBase() {
-  const notionToken = String(process.env.NOTION_TOKEN || '').trim();
-  if (!notionToken) return { kb: STATIC_KB, syncMode: 'snapshot' };
+async function queryDatabase(databaseId, token) {
+  const pages = [];
+  let cursor = null;
+  do {
+    const body = { page_size: 100 };
+    if (cursor) body.start_cursor = cursor;
+    const data = await notionRequest(`/databases/${databaseId}/query`, token, { method: 'POST', body });
+    pages.push(...(data.results || []).filter((x) => x.object === 'page' && !x.archived));
+    cursor = data.has_more ? data.next_cursor : null;
+  } while (cursor);
+  return pages;
+}
+
+function pageUrl(page) {
+  if (page?.url) return page.url;
+  const compact = String(page?.id || '').replace(/-/g, '');
+  return compact ? `https://www.notion.so/${compact}` : '';
+}
+
+async function crawlNotion(token) {
+  const denyRules = buildDenyRules();
+  const visitedPages = new Set();
+  const visitedDatabases = new Set();
+  const pages = [];
+
+  async function crawlPage(pageId, depth, knownPage = null, knownTitle = '') {
+    if (depth > MAX_DEPTH || pages.length >= MAX_PAGES || visitedPages.has(pageId)) return;
+    visitedPages.add(pageId);
+
+    let page = knownPage;
+    try {
+      if (!page) page = await notionRequest(`/pages/${pageId}`, token);
+    } catch (error) {
+      console.error('Notion page fetch failed:', pageId, error.message);
+      return;
+    }
+
+    const title = getPageTitle(page) || knownTitle || '제목 없음';
+    if (isDenied(page.id, title, denyRules)) return;
+
+    const content = await collectBlockContent(page.id, token, depth);
+    const cleanText = String(content.text || '').trim();
+    pages.push({
+      id: page.id,
+      title,
+      url: pageUrl(page),
+      text: cleanText,
+      lastEdited: page.last_edited_time || '',
+      live: true
+    });
+
+    for (const child of content.childPages) {
+      if (pages.length >= MAX_PAGES) break;
+      if (!isDenied(child.id, child.title, denyRules)) await crawlPage(child.id, depth + 1, null, child.title);
+    }
+
+    for (const childDb of content.childDatabases) {
+      if (pages.length >= MAX_PAGES) break;
+      await crawlDatabase(childDb.id, depth + 1, childDb.title);
+    }
+  }
+
+  async function crawlDatabase(databaseId, depth, knownTitle = '') {
+    if (depth > MAX_DEPTH || pages.length >= MAX_PAGES || visitedDatabases.has(databaseId)) return;
+    visitedDatabases.add(databaseId);
+
+    let database;
+    try {
+      database = await notionRequest(`/databases/${databaseId}`, token);
+    } catch (error) {
+      console.error('Notion database fetch failed:', databaseId, error.message);
+      return;
+    }
+
+    const title = getDatabaseTitle(database) || knownTitle;
+    if (isDenied(database.id, title, denyRules)) return;
+
+    let dbPages = [];
+    try {
+      dbPages = await queryDatabase(database.id, token);
+    } catch (error) {
+      console.error('Notion database query failed:', title, error.message);
+      return;
+    }
+
+    for (const page of dbPages) {
+      if (pages.length >= MAX_PAGES) break;
+      await crawlPage(page.id, depth + 1, page);
+    }
+  }
+
+  await crawlPage(ROOT_PAGE_ID, 0);
+  return pages;
+}
+
+function chunkPage(page) {
+  const raw = String(page.text || '').trim();
+  if (!raw) return [];
+  const paragraphs = raw.split(/\n{2,}|(?=^#{1,3}\s)/m).map((x) => x.trim()).filter(Boolean);
+  const chunks = [];
+  let current = '';
+
+  function pushCurrent() {
+    const text = current.trim();
+    if (!text) return;
+    chunks.push({
+      pageId: page.id,
+      title: page.title,
+      url: page.url,
+      lastEdited: page.lastEdited,
+      text,
+      live: page.live
+    });
+    current = text.slice(Math.max(0, text.length - CHUNK_OVERLAP));
+  }
+
+  for (const para of paragraphs) {
+    if (current && current.length + para.length + 2 > CHUNK_SIZE) pushCurrent();
+    current += `${current ? '\n\n' : ''}${para}`;
+    while (current.length > CHUNK_SIZE) pushCurrent();
+  }
+  if (current.trim()) pushCurrent();
+  return chunks;
+}
+
+function staticChunks() {
+  return STATIC_KB.flatMap((doc) => chunkPage({
+    id: doc.id,
+    title: doc.title,
+    url: doc.url,
+    text: doc.text,
+    lastEdited: null,
+    live: false
+  }));
+}
+
+async function refreshIndex(token) {
+  const now = Date.now();
+  if (state.chunks.length && now - state.refreshedAt < NOTION_REFRESH_MS) return state;
 
   try {
-    const kb = await refreshNotionKB(notionToken);
-    if (kb.length) return { kb, syncMode: 'notion-live' };
+    const pages = await crawlNotion(token);
+    const chunks = pages.flatMap(chunkPage);
+    if (!chunks.length) throw new Error('Notion에서 검색 가능한 텍스트를 찾지 못했습니다.');
+
+    state.pages = pages;
+    state.chunks = chunks;
+    state.refreshedAt = now;
+    state.syncError = null;
+    return state;
   } catch (error) {
-    console.error('Notion knowledge refresh error:', error);
+    console.error('Full Notion index refresh failed:', error);
+    state.syncError = error.message;
+    if (!state.chunks.length) {
+      state.pages = [];
+      state.chunks = staticChunks();
+      state.refreshedAt = now;
+    }
+    return state;
   }
-  return { kb: STATIC_KB, syncMode: 'snapshot-fallback' };
 }
 
-function sourceStatus(doc) {
-  const text = String(doc.text || '');
-  const year2026 = /2026/.test(text);
-  const needs2027 = /2027[^\n]{0,30}(확인|재확인|안내|기준)/.test(text) || /해당 학년도|다음 학년도|최신.*확인/.test(text);
+async function getIndex() {
+  const notionToken = String(process.env.NOTION_TOKEN || '').trim();
+  if (!notionToken) {
+    return { chunks: staticChunks(), pages: [], syncMode: 'snapshot', refreshedAt: null, syncError: null };
+  }
+
+  const index = await refreshIndex(notionToken);
+  const liveCount = index.pages.filter((p) => p.live).length;
+  const syncMode = liveCount ? 'notion-full-live' : 'snapshot-fallback';
+  return { ...index, syncMode };
+}
+
+function scoreChunk(question, chunk) {
+  const q = normalize(question);
+  const qTokens = tokens(question);
+  const title = normalize(chunk.title);
+  const haystack = normalize(`${chunk.title} ${chunk.text}`);
+  let score = 0;
+
+  if (title && q.includes(title)) score += 16;
+  for (const token of qTokens) {
+    if (title.includes(token)) score += token.length >= 4 ? 8 : 5;
+    if (haystack.includes(token)) score += token.length >= 4 ? 4 : 2;
+  }
+
+  const phrases = [
+    ['교외체험학습', 14], ['생활기록부', 14], ['수행평가', 12], ['평가계획', 12],
+    ['웨일북', 14], ['웨일스페이스', 12], ['연가', 10], ['병가', 10], ['출장', 10],
+    ['결재', 10], ['결석', 10], ['출결', 10], ['스마트기기', 10], ['업무', 6], ['담당', 6]
+  ];
+  for (const [phrase, boost] of phrases) {
+    if (q.includes(phrase) && haystack.includes(phrase)) score += boost;
+  }
+  return score;
+}
+
+function retrieve(question, chunks) {
+  const ranked = chunks
+    .map((chunk) => ({ ...chunk, score: scoreChunk(question, chunk) }))
+    .filter((chunk) => chunk.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const selected = [];
+  const perPage = new Map();
+  for (const chunk of ranked) {
+    const count = perPage.get(chunk.pageId) || 0;
+    if (count >= 2) continue;
+    selected.push(chunk);
+    perPage.set(chunk.pageId, count + 1);
+    if (selected.length >= MAX_DOCS) break;
+  }
+  return selected;
+}
+
+function sourceStatus(source) {
+  const text = String(source.text || '');
+  const title = String(source.title || '');
+  const year2026 = /2026/.test(`${title}\n${text}`);
+  const needs2027 = /2027[^\n]{0,40}(확인|재확인|안내|기준|예정)/.test(text)
+    || /해당 학년도|다음 학년도|최신.*확인|2027 확인 필요/.test(text);
   if (needs2027) return 'confirm-2027';
   if (year2026) return 'year-2026';
   return 'current';
+}
+
+function uniqueSources(chunks) {
+  const map = new Map();
+  for (const chunk of chunks) {
+    const prev = map.get(chunk.pageId);
+    if (!prev || chunk.score > prev.score) map.set(chunk.pageId, chunk);
+  }
+  return [...map.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .map((chunk) => ({
+      pageId: chunk.pageId,
+      title: chunk.title,
+      url: chunk.url,
+      score: chunk.score,
+      status: sourceStatus(chunk),
+      lastEdited: chunk.lastEdited || null
+    }));
 }
 
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'POST 요청만 지원합니다.' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST 요청만 지원합니다.' });
 
   try {
     const question = String(req.body?.question || '').trim();
@@ -214,29 +439,27 @@ module.exports = async function handler(req, res) {
     if (question.length > 500) return res.status(400).json({ error: '질문은 500자 이내로 입력해 주세요.' });
 
     const apiKey = String(process.env.OPENAI_API_KEY || '').trim();
-    if (!apiKey) {
-      return res.status(500).json({ error: 'OPENAI_API_KEY 환경변수가 설정되지 않았습니다.' });
-    }
+    if (!apiKey) return res.status(500).json({ error: 'OPENAI_API_KEY 환경변수가 설정되지 않았습니다.' });
 
-    const { kb, syncMode } = await getKnowledgeBase();
-    const docs = retrieve(question, kb);
+    const index = await getIndex();
+    const docs = retrieve(question, index.chunks);
     if (!docs.length || docs[0].score < 3) {
       return res.status(200).json({
         answer: '현재 전입교원 가이드에서 이 질문에 대한 근거를 확인하지 못했습니다. 학교 담당 업무 또는 관리자에게 확인해 주세요.',
         sources: [],
         grounded: false,
         badges: [{ type: 'unknown', label: '가이드에서 확인되지 않음' }],
-        syncMode
+        syncMode: index.syncMode,
+        indexedPages: index.pages?.length || 0,
+        refreshedAt: index.refreshedAt || null
       });
     }
 
     const context = docs
       .map((doc, i) => `[자료 ${i + 1}] ${doc.title}\n${doc.text}`)
-      .join('\n\n');
+      .join('\n\n---\n\n');
 
-    const instructions = `당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n\n반드시 아래 규칙을 지키세요.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 일반 지식이나 추측으로 빈틈을 채우지 마세요.\n2. 자료에 답이 없거나 확실하지 않으면 "현재 전입교원 가이드에서 확인되지 않습니다"라고 명확히 말하세요.\n3. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요. 연도 확인이 필요한 내용에는 "2026 기준" 또는 "2027학년도 안내에서 재확인"이라고 적으세요.\n4. 답변은 교직원이 바로 읽을 수 있도록 짧은 문단 2~4개로 작성하세요. 한 문단이 너무 길지 않게 하세요.\n5. 절차가 있으면 줄바꿈 후 짧은 목록으로 정리하세요.\n6. 중요한 핵심어는 **굵게** 표시할 수 있습니다. 다른 복잡한 마크다운은 쓰지 마세요.\n7. 사람 이름, 비밀번호, 개인정보를 만들어내거나 추정하지 마세요.\n8. 답변 안에 URL이나 '출처' 목록을 만들지 마세요. 출처는 시스템이 별도로 표시합니다.`;
-
-    const input = `질문: ${question}\n\n아래는 검색된 전입교원 가이드 자료입니다.\n\n${context}`;
+    const instructions = `당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n\n반드시 아래 규칙을 지키세요.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 일반 지식이나 추측으로 빈틈을 채우지 마세요.\n2. 자료에 답이 없거나 확실하지 않으면 "현재 전입교원 가이드에서 확인되지 않습니다"라고 명확히 말하세요.\n3. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요. 연도 확인이 필요한 내용에는 "2026 기준" 또는 "2027학년도 안내에서 재확인"이라고 적으세요.\n4. 서로 다른 자료가 충돌하면 임의로 하나를 고르지 말고, 충돌 사실을 짧게 알리고 최신 공문·해당 학년도 지침 확인이 필요하다고 답하세요.\n5. 답변은 교직원이 바로 읽을 수 있도록 짧은 문단 2~4개로 작성하세요. 절차는 짧은 목록으로 정리할 수 있습니다.\n6. 중요한 핵심어는 **굵게** 표시할 수 있습니다. 복잡한 마크다운은 쓰지 마세요.\n7. 사람 이름, 학생 정보, 비밀번호, 개인정보, 인증서 정보를 만들어내거나 추정하지 마세요. 자료에 이런 정보가 있더라도 질문에 불필요하면 답변에 노출하지 마세요.\n8. 답변 안에 URL이나 출처 목록을 만들지 마세요. 출처는 시스템이 별도로 표시합니다.`;
 
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -247,32 +470,21 @@ module.exports = async function handler(req, res) {
       body: JSON.stringify({
         model: MODEL,
         instructions,
-        input,
-        max_output_tokens: 700
+        input: `질문: ${question}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,
+        max_output_tokens: 800
       })
     });
 
     const data = await response.json();
     if (!response.ok) {
       console.error('OpenAI API error:', data);
-      return res.status(502).json({
-        error: data?.error?.message || `OpenAI API 오류 (${response.status})`
-      });
+      return res.status(502).json({ error: data?.error?.message || `OpenAI API 오류 (${response.status})` });
     }
 
     const answer = extractOutputText(data);
-    if (!answer) {
-      return res.status(502).json({ error: 'AI 답변을 생성하지 못했습니다.' });
-    }
+    if (!answer) return res.status(502).json({ error: 'AI 답변을 생성하지 못했습니다.' });
 
-    const sources = docs.slice(0, 3).map((doc) => ({
-      title: doc.title,
-      url: doc.url,
-      score: doc.score,
-      status: sourceStatus(doc),
-      lastEdited: doc.lastEdited || null
-    }));
-
+    const sources = uniqueSources(docs);
     const statuses = new Set(sources.map((s) => s.status));
     const badges = [];
     if (statuses.has('confirm-2027')) badges.push({ type: 'confirm-2027', label: '2027 확인 필요' });
@@ -284,7 +496,10 @@ module.exports = async function handler(req, res) {
       sources,
       grounded: true,
       badges,
-      syncMode,
+      syncMode: index.syncMode,
+      indexedPages: index.pages?.length || 0,
+      refreshedAt: index.refreshedAt || null,
+      syncError: index.syncError || null,
       model: MODEL
     });
   } catch (error) {
