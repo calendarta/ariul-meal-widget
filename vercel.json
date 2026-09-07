@@ -1,9 +1,11 @@
 {
   "version": 2,
   "functions": {
-    "api/meal.js": { "maxDuration": 10 }
+    "api/meal.js": { "maxDuration": 10 },
+    "api/teacher-ai.js": { "maxDuration": 30 }
   },
   "rewrites": [
-    { "source": "/", "destination": "/index.html" }
+    { "source": "/", "destination": "/index.html" },
+    { "source": "/teacher-ai", "destination": "/teacher-ai.html" }
   ]
 }
