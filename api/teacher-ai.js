@@ -3,10 +3,13 @@ const STATIC_KB = require('../data/teacher-kb');
 const MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-luna';
 const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID || '3c9a0cff-dadd-8091-b962-caa4ac112d53';
 const NOTION_VERSION = '2022-06-28';
-const NOTION_REFRESH_MS = 60 * 1000;
+const NOTION_REFRESH_MS = 30 * 60 * 1000;
+const NOTION_REQUEST_TIMEOUT_MS = 2000;
+const NOTION_CRAWL_DEADLINE_MS = 8000;
+const OPENAI_TIMEOUT_MS = 15000;
 const MAX_DOCS = 6;
-const MAX_PAGES = 160;
-const MAX_DEPTH = 10;
+const MAX_PAGES = 100;
+const MAX_DEPTH = 6;
 const CHUNK_SIZE = 2600;
 const CHUNK_OVERLAP = 280;
 
@@ -27,6 +30,8 @@ const state = globalThis.__ARIUL_NOTION_INDEX__ || {
   syncError: null
 };
 globalThis.__ARIUL_NOTION_INDEX__ = state;
+
+globalThis.__ARIUL_NOTION_REFRESH_PROMISE__ = globalThis.__ARIUL_NOTION_REFRESH_PROMISE__ || null;
 
 function normalize(text = '') {
   return String(text)
@@ -97,17 +102,47 @@ function blockToText(block) {
   return text;
 }
 
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs, timeoutMessage) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const raw = await response.text();
+    let data = {};
+    if (raw) {
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        const err = new Error(`서버가 JSON이 아닌 응답을 반환했습니다. (${response.status})`);
+        err.status = response.status;
+        throw err;
+      }
+    }
+    return { response, data };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(timeoutMessage);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function notionRequest(path, token, options = {}) {
-  const response = await fetch(`https://api.notion.com/v1${path}`, {
-    method: options.method || 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Notion-Version': NOTION_VERSION,
-      'Content-Type': 'application/json'
+  const { response, data } = await fetchJsonWithTimeout(
+    `https://api.notion.com/v1${path}`,
+    {
+      method: options.method || 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Notion-Version': NOTION_VERSION,
+        'Content-Type': 'application/json'
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
     },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const data = await response.json();
+    NOTION_REQUEST_TIMEOUT_MS,
+    `Notion API 응답 시간이 ${NOTION_REQUEST_TIMEOUT_MS / 1000}초를 초과했습니다.`
+  );
+
   if (!response.ok) {
     const err = new Error(data?.message || `Notion API 오류 (${response.status})`);
     err.status = response.status;
@@ -137,10 +172,11 @@ function isDenied(id, title, rules) {
   return rules.titles.some((pattern) => pattern && t.includes(pattern));
 }
 
-async function listBlockChildren(blockId, token) {
+async function listBlockChildren(blockId, token, assertWithinDeadline) {
   const results = [];
   let cursor = null;
   do {
+    assertWithinDeadline();
     const qs = new URLSearchParams({ page_size: '100' });
     if (cursor) qs.set('start_cursor', cursor);
     const data = await notionRequest(`/blocks/${blockId}/children?${qs.toString()}`, token);
@@ -150,14 +186,16 @@ async function listBlockChildren(blockId, token) {
   return results;
 }
 
-async function collectBlockContent(blockId, token, depth = 0) {
+async function collectBlockContent(blockId, token, depth = 0, assertWithinDeadline = () => {}) {
+  assertWithinDeadline();
   if (depth > MAX_DEPTH) return { text: '', childPages: [], childDatabases: [] };
   const lines = [];
   const childPages = [];
   const childDatabases = [];
-  const blocks = await listBlockChildren(blockId, token);
+  const blocks = await listBlockChildren(blockId, token, assertWithinDeadline);
 
   for (const block of blocks) {
+    assertWithinDeadline();
     if (block.type === 'child_page') {
       childPages.push({ id: block.id, title: block.child_page?.title || '' });
       continue;
@@ -171,7 +209,7 @@ async function collectBlockContent(blockId, token, depth = 0) {
     if (line) lines.push(line);
 
     if (block.has_children) {
-      const nested = await collectBlockContent(block.id, token, depth + 1);
+      const nested = await collectBlockContent(block.id, token, depth + 1, assertWithinDeadline);
       if (nested.text) lines.push(nested.text);
       childPages.push(...nested.childPages);
       childDatabases.push(...nested.childDatabases);
@@ -181,10 +219,11 @@ async function collectBlockContent(blockId, token, depth = 0) {
   return { text: lines.join('\n'), childPages, childDatabases };
 }
 
-async function queryDatabase(databaseId, token) {
+async function queryDatabase(databaseId, token, assertWithinDeadline) {
   const pages = [];
   let cursor = null;
   do {
+    assertWithinDeadline();
     const body = { page_size: 100 };
     if (cursor) body.start_cursor = cursor;
     const data = await notionRequest(`/databases/${databaseId}/query`, token, { method: 'POST', body });
@@ -201,12 +240,22 @@ function pageUrl(page) {
 }
 
 async function crawlNotion(token) {
+  const deadlineAt = Date.now() + NOTION_CRAWL_DEADLINE_MS;
+  const assertWithinDeadline = () => {
+    if (Date.now() >= deadlineAt) {
+      const err = new Error(`Notion 색인 시간이 ${NOTION_CRAWL_DEADLINE_MS / 1000}초를 초과했습니다.`);
+      err.code = 'NOTION_CRAWL_TIMEOUT';
+      throw err;
+    }
+  };
+
   const denyRules = buildDenyRules();
   const visitedPages = new Set();
   const visitedDatabases = new Set();
   const pages = [];
 
   async function crawlPage(pageId, depth, knownPage = null, knownTitle = '') {
+    assertWithinDeadline();
     if (depth > MAX_DEPTH || pages.length >= MAX_PAGES || visitedPages.has(pageId)) return;
     visitedPages.add(pageId);
 
@@ -215,13 +264,14 @@ async function crawlNotion(token) {
       if (!page) page = await notionRequest(`/pages/${pageId}`, token);
     } catch (error) {
       console.error('Notion page fetch failed:', pageId, error.message);
+      if (error.code === 'NOTION_CRAWL_TIMEOUT') throw error;
       return;
     }
 
     const title = getPageTitle(page) || knownTitle || '제목 없음';
     if (isDenied(page.id, title, denyRules)) return;
 
-    const content = await collectBlockContent(page.id, token, depth);
+    const content = await collectBlockContent(page.id, token, depth, assertWithinDeadline);
     const cleanText = String(content.text || '').trim();
     pages.push({
       id: page.id,
@@ -233,17 +283,20 @@ async function crawlNotion(token) {
     });
 
     for (const child of content.childPages) {
+      assertWithinDeadline();
       if (pages.length >= MAX_PAGES) break;
       if (!isDenied(child.id, child.title, denyRules)) await crawlPage(child.id, depth + 1, null, child.title);
     }
 
     for (const childDb of content.childDatabases) {
+      assertWithinDeadline();
       if (pages.length >= MAX_PAGES) break;
       await crawlDatabase(childDb.id, depth + 1, childDb.title);
     }
   }
 
   async function crawlDatabase(databaseId, depth, knownTitle = '') {
+    assertWithinDeadline();
     if (depth > MAX_DEPTH || pages.length >= MAX_PAGES || visitedDatabases.has(databaseId)) return;
     visitedDatabases.add(databaseId);
 
@@ -260,13 +313,14 @@ async function crawlNotion(token) {
 
     let dbPages = [];
     try {
-      dbPages = await queryDatabase(database.id, token);
+      dbPages = await queryDatabase(database.id, token, assertWithinDeadline);
     } catch (error) {
       console.error('Notion database query failed:', title, error.message);
       return;
     }
 
     for (const page of dbPages) {
+      assertWithinDeadline();
       if (pages.length >= MAX_PAGES) break;
       await crawlPage(page.id, depth + 1, page);
     }
@@ -317,10 +371,8 @@ function staticChunks() {
   }));
 }
 
-async function refreshIndex(token) {
+async function performRefresh(token) {
   const now = Date.now();
-  if (state.chunks.length && now - state.refreshedAt < NOTION_REFRESH_MS) return state;
-
   try {
     const pages = await crawlNotion(token);
     const chunks = pages.flatMap(chunkPage);
@@ -341,6 +393,22 @@ async function refreshIndex(token) {
     }
     return state;
   }
+}
+
+async function refreshIndex(token) {
+  const now = Date.now();
+  if (state.chunks.length && now - state.refreshedAt < NOTION_REFRESH_MS) return state;
+
+  if (globalThis.__ARIUL_NOTION_REFRESH_PROMISE__) {
+    return globalThis.__ARIUL_NOTION_REFRESH_PROMISE__;
+  }
+
+  globalThis.__ARIUL_NOTION_REFRESH_PROMISE__ = performRefresh(token)
+    .finally(() => {
+      globalThis.__ARIUL_NOTION_REFRESH_PROMISE__ = null;
+    });
+
+  return globalThis.__ARIUL_NOTION_REFRESH_PROMISE__;
 }
 
 async function getIndex() {
@@ -371,7 +439,8 @@ function scoreChunk(question, chunk) {
   const phrases = [
     ['교외체험학습', 14], ['생활기록부', 14], ['수행평가', 12], ['평가계획', 12],
     ['웨일북', 14], ['웨일스페이스', 12], ['연가', 10], ['병가', 10], ['출장', 10],
-    ['결재', 10], ['결석', 10], ['출결', 10], ['스마트기기', 10], ['업무', 6], ['담당', 6]
+    ['결재', 10], ['결석', 10], ['출결', 10], ['스마트기기', 10], ['업무', 6], ['담당', 6],
+    ['급여', 10], ['수당', 10], ['정근수당', 12], ['명절휴가비', 12], ['전보', 12], ['학적', 10]
   ];
   for (const [phrase, boost] of phrases) {
     if (q.includes(phrase) && haystack.includes(phrase)) score += boost;
@@ -451,7 +520,8 @@ module.exports = async function handler(req, res) {
         badges: [{ type: 'unknown', label: '가이드에서 확인되지 않음' }],
         syncMode: index.syncMode,
         indexedPages: index.pages?.length || 0,
-        refreshedAt: index.refreshedAt || null
+        refreshedAt: index.refreshedAt || null,
+        syncError: index.syncError || null
       });
     }
 
@@ -461,21 +531,25 @@ module.exports = async function handler(req, res) {
 
     const instructions = `당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n\n반드시 아래 규칙을 지키세요.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 일반 지식이나 추측으로 빈틈을 채우지 마세요.\n2. 자료에 답이 없거나 확실하지 않으면 "현재 전입교원 가이드에서 확인되지 않습니다"라고 명확히 말하세요.\n3. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요. 연도 확인이 필요한 내용에는 "2026 기준" 또는 "2027학년도 안내에서 재확인"이라고 적으세요.\n4. 서로 다른 자료가 충돌하면 임의로 하나를 고르지 말고, 충돌 사실을 짧게 알리고 최신 공문·해당 학년도 지침 확인이 필요하다고 답하세요.\n5. 답변은 교직원이 바로 읽을 수 있도록 짧은 문단 2~4개로 작성하세요. 절차는 짧은 목록으로 정리할 수 있습니다.\n6. 중요한 핵심어는 **굵게** 표시할 수 있습니다. 복잡한 마크다운은 쓰지 마세요.\n7. 사람 이름, 학생 정보, 비밀번호, 개인정보, 인증서 정보를 만들어내거나 추정하지 마세요. 자료에 이런 정보가 있더라도 질문에 불필요하면 답변에 노출하지 마세요.\n8. 답변 안에 URL이나 출처 목록을 만들지 마세요. 출처는 시스템이 별도로 표시합니다.`;
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+    const { response, data } = await fetchJsonWithTimeout(
+      'https://api.openai.com/v1/responses',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          instructions,
+          input: `질문: ${question}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,
+          max_output_tokens: 800
+        })
       },
-      body: JSON.stringify({
-        model: MODEL,
-        instructions,
-        input: `질문: ${question}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,
-        max_output_tokens: 800
-      })
-    });
+      OPENAI_TIMEOUT_MS,
+      `AI 답변 생성 시간이 ${OPENAI_TIMEOUT_MS / 1000}초를 초과했습니다. 잠시 후 다시 시도해 주세요.`
+    );
 
-    const data = await response.json();
     if (!response.ok) {
       console.error('OpenAI API error:', data);
       return res.status(502).json({ error: data?.error?.message || `OpenAI API 오류 (${response.status})` });
