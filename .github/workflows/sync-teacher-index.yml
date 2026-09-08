@@ -1,0 +1,34 @@
+name: Sync teacher Notion index
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 */6 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build Notion snapshot
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_ROOT_PAGE_ID: 3c9a0cffdadd8091b962caa4ac112d53
+        run: node scripts/sync-notion-index.js
+      - name: Commit snapshot when changed
+        run: |
+          if git diff --quiet -- data/teacher-index.json; then
+            echo "No snapshot changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/teacher-index.json
+          git commit -m "chore: refresh teacher Notion index"
+          git push
