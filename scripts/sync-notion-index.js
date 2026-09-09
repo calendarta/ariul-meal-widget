@@ -6,13 +6,18 @@ const ROOT_PAGE_ID = process.env.NOTION_ROOT_PAGE_ID || '3c9a0cffdadd8091b962caa
 const NOTION_VERSION = '2022-06-28';
 const MAX_PAGES = 250;
 const MAX_DEPTH = 10;
+const MIN_REQUEST_INTERVAL_MS = 380;
+const MAX_RETRIES = 5;
+const MIN_SAFE_PAGE_COUNT = 20;
 const DENY = ['비밀번호','개인정보','인증서'];
+let lastRequestAt = 0;
 
 if (!TOKEN) {
   console.error('NOTION_TOKEN is required.');
   process.exit(1);
 }
 
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function normalize(text='') {
   return String(text).toLowerCase().replace(/\s+/g,' ').trim();
 }
@@ -44,15 +49,11 @@ function pageMentionsFromRichText(rich=[]) {
 }
 function linkedPageIdsFromBlock(block) {
   const ids=[];
-  if (block?.type === 'link_to_page' && block.link_to_page?.type === 'page_id' && block.link_to_page.page_id) {
-    ids.push(block.link_to_page.page_id);
-  }
+  if (block?.type === 'link_to_page' && block.link_to_page?.type === 'page_id' && block.link_to_page.page_id) ids.push(block.link_to_page.page_id);
   const type=block?.type;
   const data=block?.[type] || {};
   ids.push(...pageMentionsFromRichText(data.rich_text || []));
-  if (type === 'table_row') {
-    for (const cell of data.cells || []) ids.push(...pageMentionsFromRichText(cell));
-  }
+  if (type === 'table_row') for (const cell of data.cells || []) ids.push(...pageMentionsFromRichText(cell));
   return ids;
 }
 function blockToText(block) {
@@ -80,20 +81,32 @@ function blockToText(block) {
 }
 
 async function notion(pathname, options={}) {
-  const res = await fetch(`https://api.notion.com/v1${pathname}`, {
-    method: options.method || 'GET',
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      'Notion-Version': NOTION_VERSION,
-      'Content-Type': 'application/json'
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const text = await res.text();
-  let data = {};
-  try { data = text ? JSON.parse(text) : {}; } catch {}
-  if (!res.ok) throw new Error(data?.message || `Notion API ${res.status}`);
-  return data;
+  for (let attempt=0; attempt<=MAX_RETRIES; attempt++) {
+    const wait = Math.max(0, MIN_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt));
+    if (wait) await sleep(wait);
+    lastRequestAt = Date.now();
+    const res = await fetch(`https://api.notion.com/v1${pathname}`, {
+      method: options.method || 'GET',
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'Notion-Version': NOTION_VERSION,
+        'Content-Type': 'application/json'
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    const text = await res.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch {}
+    if (res.ok) return data;
+    if (res.status === 429 && attempt < MAX_RETRIES) {
+      const retryAfter = Number(res.headers.get('retry-after') || 0);
+      const backoff = retryAfter > 0 ? retryAfter * 1000 : Math.min(8000, 1000 * (2 ** attempt));
+      console.warn(`Notion rate limit: retry ${attempt + 1}/${MAX_RETRIES} after ${backoff}ms`);
+      await sleep(backoff);
+      continue;
+    }
+    throw new Error(data?.message || `Notion API ${res.status}`);
+  }
 }
 
 async function listChildren(blockId) {
@@ -196,14 +209,18 @@ async function crawl() {
 
 (async () => {
   const pages = await crawl();
-  if (!pages.length) throw new Error('No pages were indexed. Existing snapshot was not overwritten.');
+  const target = path.join(process.cwd(), 'data', 'teacher-index.json');
+  let previousCount = 0;
+  try { previousCount = JSON.parse(fs.readFileSync(target, 'utf8'))?.pageCount || 0; } catch {}
+  if (!pages.length || pages.length < MIN_SAFE_PAGE_COUNT || (previousCount >= MIN_SAFE_PAGE_COUNT && pages.length < Math.floor(previousCount * 0.65))) {
+    throw new Error(`Snapshot looks incomplete (${pages.length} pages; previous ${previousCount}). Existing snapshot was not overwritten.`);
+  }
   const payload = {
     generatedAt: new Date().toISOString(),
     rootPageId: ROOT_PAGE_ID,
     pageCount: pages.length,
     pages
   };
-  const target = path.join(process.cwd(), 'data', 'teacher-index.json');
   fs.writeFileSync(target, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   console.log(`Indexed ${pages.length} Notion pages -> ${target}`);
 })().catch(err => {
