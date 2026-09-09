@@ -2,6 +2,10 @@ name: Sync teacher Notion index
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/sync-notion-index.js'
+      - '.github/workflows/sync-teacher-index.yml'
   schedule:
     - cron: '15 */6 * * *'
 
@@ -15,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - name: Build Notion snapshot
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
