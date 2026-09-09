@@ -35,6 +35,26 @@ function denied(title='') {
   const t = normalize(title);
   return DENY.some(x => t.includes(normalize(x)));
 }
+function pageMentionsFromRichText(rich=[]) {
+  const ids=[];
+  for (const r of rich) {
+    if (r?.type === 'mention' && r?.mention?.type === 'page' && r.mention.page?.id) ids.push(r.mention.page.id);
+  }
+  return ids;
+}
+function linkedPageIdsFromBlock(block) {
+  const ids=[];
+  if (block?.type === 'link_to_page' && block.link_to_page?.type === 'page_id' && block.link_to_page.page_id) {
+    ids.push(block.link_to_page.page_id);
+  }
+  const type=block?.type;
+  const data=block?.[type] || {};
+  ids.push(...pageMentionsFromRichText(data.rich_text || []));
+  if (type === 'table_row') {
+    for (const cell of data.cells || []) ids.push(...pageMentionsFromRichText(cell));
+  }
+  return ids;
+}
 function blockToText(block) {
   const type = block?.type;
   const data = block?.[type] || {};
@@ -42,6 +62,7 @@ function blockToText(block) {
   if (type === 'divider') return '---';
   if (type === 'table_row') return (data.cells || []).map(richTextToPlain).join(' | ');
   if (type === 'bookmark' || type === 'link_preview') return data.url ? `링크: ${data.url}` : '';
+  if (type === 'link_to_page') return '연결 페이지';
   if (['file','pdf','image','video','audio'].includes(type)) {
     const caption = richTextToPlain(data.caption || []);
     return caption ? `첨부자료: ${caption}` : '';
@@ -89,10 +110,11 @@ async function listChildren(blockId) {
 }
 
 async function collect(blockId, depth=0) {
-  if (depth > MAX_DEPTH) return { text:'', childPages:[], childDatabases:[] };
-  const lines=[], childPages=[], childDatabases=[];
+  if (depth > MAX_DEPTH) return { text:'', childPages:[], childDatabases:[], linkedPages:[] };
+  const lines=[], childPages=[], childDatabases=[], linkedPages=[];
   const blocks = await listChildren(blockId);
   for (const block of blocks) {
+    linkedPages.push(...linkedPageIdsFromBlock(block));
     if (block.type === 'child_page') {
       childPages.push({ id:block.id, title:block.child_page?.title || '' });
       continue;
@@ -108,9 +130,10 @@ async function collect(blockId, depth=0) {
       if (nested.text) lines.push(nested.text);
       childPages.push(...nested.childPages);
       childDatabases.push(...nested.childDatabases);
+      linkedPages.push(...nested.linkedPages);
     }
   }
-  return { text:lines.join('\n'), childPages, childDatabases };
+  return { text:lines.join('\n'), childPages, childDatabases, linkedPages:[...new Set(linkedPages)] };
 }
 
 async function queryDatabase(id) {
@@ -150,6 +173,7 @@ async function crawl() {
       lastEdited: page.last_edited_time || null
     });
     for (const child of content.childPages) await crawlPage(child.id, depth+1);
+    for (const linkedId of content.linkedPages) await crawlPage(linkedId, depth+1);
     for (const db of content.childDatabases) await crawlDatabase(db.id, depth+1);
   }
 
