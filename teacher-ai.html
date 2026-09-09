@@ -33,8 +33,61 @@
     function badgeIcon(type){return type==='current'?'✓':type==='unknown'?'!':'⚠'}
     function formatEdited(value){if(!value)return '';try{return new Intl.DateTimeFormat('ko-KR',{year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(new Date(value))}catch{return ''}}
     function formatSyncTime(value){if(!value)return '';try{return new Intl.DateTimeFormat('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(value))}catch{return ''}}
-    function legacyCopy(text){const ta=document.createElement('textarea');ta.value=text;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.left='-9999px';ta.style.top='0';document.body.appendChild(ta);ta.focus();ta.select();ta.setSelectionRange(0,ta.value.length);let ok=false;try{ok=document.execCommand('copy')}catch{}document.body.removeChild(ta);return ok}
-    async function copyAnswer(){if(!rawAnswer)return;let ok=false;try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(rawAnswer);ok=true}}catch{}if(!ok)ok=legacyCopy(rawAnswer);copyBtn.textContent=ok?'복사됨':'실패';setTimeout(()=>copyBtn.textContent='복사',1200)}
+    function legacyCopy(text){
+      const ta=document.createElement('textarea');
+      const active=document.activeElement;
+      ta.value=text;
+      ta.setAttribute('readonly','');
+      ta.setAttribute('aria-hidden','true');
+      ta.style.position='fixed';
+      ta.style.top='0';
+      ta.style.left='0';
+      ta.style.width='2px';
+      ta.style.height='2px';
+      ta.style.opacity='0.01';
+      ta.style.pointerEvents='none';
+      ta.style.zIndex='-1';
+      document.body.appendChild(ta);
+      ta.focus({preventScroll:true});
+      ta.select();
+      ta.setSelectionRange(0,ta.value.length);
+      let ok=false;
+      try{ok=!!document.execCommand('copy')}catch{}
+      document.body.removeChild(ta);
+      try{if(active&&typeof active.focus==='function')active.focus({preventScroll:true})}catch{}
+      return ok;
+    }
+    function selectionCopy(text){
+      const box=document.createElement('div');
+      box.textContent=text;
+      box.contentEditable='true';
+      box.style.position='fixed';box.style.top='0';box.style.left='0';box.style.opacity='0.01';box.style.pointerEvents='none';
+      document.body.appendChild(box);
+      const range=document.createRange();range.selectNodeContents(box);
+      const sel=window.getSelection();sel.removeAllRanges();sel.addRange(range);
+      let ok=false;try{ok=!!document.execCommand('copy')}catch{}
+      sel.removeAllRanges();document.body.removeChild(box);return ok;
+    }
+    function setCopyState(text){copyBtn.textContent=text;setTimeout(()=>copyBtn.textContent='복사',1400)}
+    async function copyAnswer(){
+      if(!rawAnswer)return;
+      // Notion 임베드에서는 Clipboard API 권한이 막힐 수 있으므로,
+      // 클릭의 사용자 활성화가 살아있는 동안 동기식 복사를 먼저 시도합니다.
+      if(legacyCopy(rawAnswer)||selectionCopy(rawAnswer)){setCopyState('복사됨');return}
+      try{
+        if(navigator.clipboard&&window.isSecureContext){
+          await navigator.clipboard.writeText(rawAnswer);
+          setCopyState('복사됨');return;
+        }
+      }catch{}
+      // 브라우저가 임베드의 클립보드 쓰기를 완전히 막은 경우 답변 전체를 선택해
+      // Ctrl+C / ⌘+C 한 번으로 복사할 수 있게 합니다.
+      try{
+        const range=document.createRange();range.selectNodeContents(answer);
+        const sel=window.getSelection();sel.removeAllRanges();sel.addRange(range);
+        setCopyState('Ctrl+C');
+      }catch{setCopyState('복사 불가')}
+    }
     async function parseApiResponse(res){
       const text=await res.text();
       if(!text) return {};
