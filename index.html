@@ -182,7 +182,7 @@
 
     .menu-item{
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 10px;
       background: var(--card);
       border: 1px solid var(--line);
@@ -200,29 +200,6 @@
       background: var(--accent);
       flex: 0 0 auto;
     }
-
-    .dish-photo{
-      width: 84px; height: 84px; flex: 0 0 84px;
-      border-radius: 10px; background: var(--soft);
-      display: flex; align-items: center; justify-content: center;
-      overflow: hidden; font-size: 28px;
-    }
-    .dish-photo img{ width: 100%; height: 100%; object-fit: contain; }
-    .dish-content{ min-width: 0; flex: 1; overflow-wrap: anywhere; }
-    .dish-name{ font-weight: 700; }
-    .dish-credit{ color: var(--sub); font-size: 11px; line-height: 1.5; margin-top: 4px; }
-    .dish-credit a{ color: inherit; text-underline-offset: 2px; }
-    .dish-actions{ display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-    .dish-actions button{
-      font: inherit; font-size: 11px; color: var(--sub); cursor: pointer;
-      background: var(--soft); border: 1px solid var(--line); border-radius: 6px;
-      padding: 4px 8px; min-height: 28px;
-    }
-    .image-note{ font-size: 12px; line-height: 1.6; color: var(--sub); margin: 12px 0 0; }
-    .image-settings{ font-size: 12px; margin-top: 8px; color: var(--sub); }
-    .image-settings label{ display: flex; align-items: center; gap: 6px; }
-    .image-settings input{ accent-color: var(--accent); }
-    [hidden]{ display: none !important; }
 
     .empty{
       background: var(--soft);
@@ -354,8 +331,6 @@
       .title{ font-size: 20px; }
       .controls{ grid-template-columns: 40px 56px 1fr 40px; }
       .btn,.date-input{ height: 42px; }
-      .dish-photo{ width: 68px; height: 68px; flex-basis: 68px; }
-      .menu-item{ padding: 10px; }
     }
   </style>
 </head>
@@ -392,7 +367,6 @@
     </div>
   </div>
 
-  <script src="/dish-images.js"></script>
   <script>
     const el = {
       body: document.getElementById('body'),
@@ -438,14 +412,10 @@
 
     function renderMeal(data) {
       const meal = data.meal;
-      const dishes = (meal.dishes || []).map((item, index) => `
+      const dishes = (meal.dishes || []).map(item => `
         <div class="menu-item">
-          <div class="dish-photo" data-dish-photo="${index}" aria-label="음식 참고 이미지"><span aria-hidden="true">🍽️</span></div>
-          <div class="dish-content">
-            <div class="dish-name">${escapeHtml(item)}</div>
-            <div class="dish-credit" data-dish-credit="${index}">사진 검색 중…</div>
-            <div class="dish-actions" data-dish-actions="${index}" hidden></div>
-          </div>
+          <span class="menu-bullet"></span>
+          <span>${escapeHtml(item)}</span>
         </div>
       `).join('');
 
@@ -490,11 +460,6 @@
           <div class="menu-list">
             ${dishes}
           </div>
-          <p class="image-note">검색한 참고 사진으로 실제 급식과 다를 수 있습니다. 정확한 사진이 없으면 유사 메뉴 또는 기본 아이콘을 표시합니다.</p>
-          <div class="image-settings">
-            <label><input type="checkbox" id="imageControls">사진 변경·숨기기</label>
-            <div id="imageSettingsNote" hidden>선택은 현재 브라우저에만 저장됩니다.</div>
-          </div>
         </div>
 
         <div class="extra">
@@ -502,7 +467,6 @@
           ${origin}
         </div>
       `;
-      window.DishImages.attach(el.body, meal.dishes || []);
     }
 
     function renderEmpty(message = '등록된 급식이 없습니다.') {
@@ -522,10 +486,7 @@
       `;
     }
 
-    let loadVersion = 0;
     async function load(date) {
-      const version = ++loadVersion;
-      window.DishImages.cancel();
       el.date.value = date;
       el.dateLine.textContent = koreanDate(date);
       el.body.innerHTML = `<div class="loading">급식 정보를 불러오는 중입니다…</div>`;
@@ -536,7 +497,6 @@
         });
 
         const data = await res.json();
-        if (version !== loadVersion) return;
 
         if (!res.ok) {
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -560,12 +520,11 @@
 
         renderMeal(data);
       } catch (err) {
-        if (version !== loadVersion) return;
         renderError(err.message || '알 수 없는 오류가 발생했습니다.');
       }
     }
 
-    const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date());
+    const today = () => formatDate(new Date());
 
     document.getElementById('prev').onclick = () => load(shiftDate(el.date.value, -1));
     document.getElementById('next').onclick = () => load(shiftDate(el.date.value, 1));
