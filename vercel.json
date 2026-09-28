@@ -2,6 +2,7 @@
   "version": 2,
   "functions": {
     "api/meal.js": { "maxDuration": 10 },
+    "api/dish-images.js": { "maxDuration": 30 },
     "api/teacher-ai.js": { "maxDuration": 30 }
   },
   "rewrites": [
