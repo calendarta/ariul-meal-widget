@@ -16,6 +16,30 @@ const STOPWORDS = new Set([
   '그리고','그런데','그러면','어떻게','어디서','언제','무엇','뭐','관련','학교','선생님','교사','학생','우리','아리울초','군산아리울초','되나요','하나요','인가요','있나요','알려줘','알려주세요','해주세요','합니다','입니다','오면','뭐부터','어디에','해야','어떤거','어떤','받을','받나요','있을까','있을까요','이번달에','이달에','며칠이야','며칠','몇일'
 ]);
 
+// Expand common school-work shorthand before retrieval, without an extra AI call.
+// Only known terms are expanded; unknown abbreviations remain in the original question.
+const SCHOOL_TERMS = [
+  ['학교폭력', ['학\\s*폭', '학교\\s*폭력']],
+  ['학교생활기록부', ['생\\s*기\\s*부', '학생부', '학교\\s*생활\\s*기록부', '생활\\s*기록부']],
+  ['학교운영위원회', ['학\\s*운\\s*위', '학교\\s*운영\\s*위원회']],
+  ['창의적 체험활동', ['창체', '창의적\\s*체험\\s*활동']],
+  ['행동특성 및 종합의견', ['행특', '행동\\s*특성\\s*및\\s*종합\\s*의견']],
+  ['교과학습발달상황', ['교과\\s*학습\\s*발달\\s*상황', '교과세특', '세특']],
+  ['학교안전공제회', ['안전\\s*공제회', '학교\\s*안전\\s*공제회']],
+  ['교외체험학습', ['교체학', '교외\\s*체험\\s*학습']],
+  ['출석인정결석', ['출석\\s*인정\\s*결석', '인정결석', '출결인정']],
+  ['나이스', ['neis']],
+  ['K에듀파인', ['k\\s*에듀\\s*파인', '에듀\\s*파인']]
+];
+function interpretQuestion(question='') {
+  let text=String(question).normalize('NFKC');
+  const suffix='(?=$|[^가-힣a-z0-9]|은|는|이|가|을|를|에|의|도|만|과|와|로|으로|에서|관련|처리|신고|사안|절차|기재|기록|삭제|정정|담당|업무|서류|신청|청구|제출|결재|대장|조치|교육|예방|심의|회의|위원|연수|방법|문의|어떻게)';
+  for (const [canonical, aliases] of SCHOOL_TERMS) {
+    const pattern=new RegExp('(^|[^가-힣a-z0-9])(?:'+aliases.join('|')+')'+suffix,'gi');
+    text=text.replace(pattern,(_,prefix)=>prefix+canonical);
+  }
+  return text;
+}
 function normalize(text='') {
   return String(text).toLowerCase().replace(/[^0-9a-zA-Z가-힣\s]/g,' ').replace(/\s+/g,' ').trim();
 }
@@ -37,7 +61,7 @@ function koreaDateParts() {
   return {year:get('year'),month:get('month'),day:get('day')};
 }
 function expandQuestion(question='') {
-  const q=normalize(question), extra=[], now=koreaDateParts();
+  const interpreted=interpretQuestion(question), q=normalize(interpreted), extra=[], now=koreaDateParts();
   const relativeMonth=/(이번\s*달|이달|이번달)/.test(q);
   const salaryIntent=/(수당|급여|월급|봉급|보수|돈|지급)/.test(q);
   const transferIntent=/(전입|전출|전학생|전입생|전편입)/.test(q);
@@ -61,7 +85,7 @@ function expandQuestion(question='') {
   if (parkingIntent) extra.push('출퇴근 및 주차','주차장','세영리첼','B구역','차량번호');
   if (leaveIntent) extra.push('교원 휴가 한눈에','교원휴가','연가','병가','공가','특별휴가','경조사휴가','출산휴가','육아시간','가족돌봄휴가','임신검진 동행휴가','장기재직휴가');
   if (longServiceLeaveIntent) extra.push('장기재직휴가','10년 이상 20년 미만 5일','20년 이상 7일','연속 사용','1회 분할','시간단위 사용 불가','연가산출용 재직기간');
-  return `${question}\n${extra.join(' ')}`.trim();
+  return `${interpreted}\n${extra.join(' ')}`.trim();
 }
 function richTextToPlain(rich=[]) {
   return rich.map(r=>r?.plain_text || r?.text?.content || '').join('');
@@ -110,7 +134,7 @@ function scoreChunk(question,chunk) {
   const expanded=expandQuestion(question), q=normalize(expanded), qTokens=tokens(expanded), title=normalize(chunk.title), haystack=normalize(`${chunk.title} ${chunk.text}`); let score=0;
   if(title && q.includes(title)) score+=18;
   for(const token of qTokens){ if(title.includes(token)) score+=token.length>=4?8:5; if(haystack.includes(token)) score+=token.length>=4?4:2; }
-  const phrases=[['전입 학생',24],['전입생',24],['전입',16],['전출',14],['주차',24],['주차장',24],['세영리첼',18],['급여',16],['수당',16],['월급',14],['보수',12],['정근수당',14],['정근수당가산금',14],['교직수당',14],['담임수당',12],['보직수당',12],['가족수당',12],['명절휴가비',14],['시간외근무수당',12],['정액급식비',12],['월별',10],['교원 휴가',18],['휴가',12],['연가',12],['병가',14],['공가',12],['특별휴가',14],['경조사휴가',14],['가족돌봄휴가',14],['육아시간',14],['임신검진 동행휴가',16],['장기재직휴가',28],['장기재직',24],['교외체험학습',14],['생활기록부',14],['수행평가',12],['평가계획',12],['웨일북',14],['웨일스페이스',12],['출장',10],['결재',10],['결석',10],['출결',10],['스마트기기',10],['전보',12],['학적',10]];
+  const phrases=[['학교폭력',24],['학교운영위원회',20],['학교안전공제회',20],['전입 학생',24],['전입생',24],['전입',16],['전출',14],['주차',24],['주차장',24],['세영리첼',18],['급여',16],['수당',16],['월급',14],['보수',12],['정근수당',14],['정근수당가산금',14],['교직수당',14],['담임수당',12],['보직수당',12],['가족수당',12],['명절휴가비',14],['시간외근무수당',12],['정액급식비',12],['월별',10],['교원 휴가',18],['휴가',12],['연가',12],['병가',14],['공가',12],['특별휴가',14],['경조사휴가',14],['가족돌봄휴가',14],['육아시간',14],['임신검진 동행휴가',16],['장기재직휴가',28],['장기재직',24],['교외체험학습',14],['생활기록부',14],['수행평가',12],['평가계획',12],['웨일북',14],['웨일스페이스',12],['출장',10],['결재',10],['결석',10],['출결',10],['스마트기기',10],['전보',12],['학적',10]];
   for(const [phrase,boost] of phrases) if(q.includes(phrase)&&haystack.includes(phrase)) score+=boost;
   return score;
 }
@@ -185,7 +209,7 @@ module.exports=async function handler(req,res) {
     const verified=await verifyCandidatesLive(question,snapshotDocs), docs=verified.docs;
     const context=docs.map((doc,i)=>`[자료 ${i+1}] ${doc.title}${doc.sourceType==='notion-live'?' (Notion 실시간 확인)':''}\n${doc.text}`).join('\n\n---\n\n');
     const now=koreaDateParts();
-    const instructions=`당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n현재 날짜(대한민국 기준)는 ${now.year}년 ${now.month}월 ${now.day}일입니다.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 추측하지 마세요.\n2. '(Notion 실시간 확인)' 자료가 있으면 같은 주제의 저장 스냅샷보다 그 내용을 우선하세요.\n3. 사용자가 '이번달', '이달', '이번 학기'처럼 상대적인 시기를 물으면 위 현재 날짜를 기준으로 해석하세요.\n4. 수당 질문에서는 '매월 지급되는 항목'과 '이번 달에 추가로 확인할 항목'을 구분하세요.\n5. 휴가 질문에서는 종류, 일수, 사용 조건, 증빙·주의사항이 자료에 있으면 함께 정리하세요.\n6. 자료에 답이 없으면 현재 가이드에서 확인되지 않는다고 말하세요.\n7. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요.\n8. 자료가 충돌하면 실시간 Notion 자료를 우선하되, 연도·공문 충돌이면 최신 공문·해당 학년도 지침 확인 필요성을 알리세요.\n9. 교직원이 바로 읽을 수 있도록 간결하게 답하세요. 중요한 핵심어는 **굵게** 표시할 수 있습니다.\n10. 사람 이름, 학생 정보, 비밀번호, 개인정보, 인증서 정보를 불필요하게 노출하지 마세요.\n11. URL과 출처 목록은 답변 본문에 쓰지 마세요.`;
+    const instructions=`당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n현재 날짜(대한민국 기준)는 ${now.year}년 ${now.month}월 ${now.day}일입니다.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 추측하지 마세요.\n2. '(Notion 실시간 확인)' 자료가 있으면 같은 주제의 저장 스냅샷보다 그 내용을 우선하세요.\n3. 사용자가 '이번달', '이달', '이번 학기'처럼 상대적인 시기를 물으면 위 현재 날짜를 기준으로 해석하세요.\n4. 수당 질문에서는 '매월 지급되는 항목'과 '이번 달에 추가로 확인할 항목'을 구분하세요.\n5. 휴가 질문에서는 종류, 일수, 사용 조건, 증빙·주의사항이 자료에 있으면 함께 정리하세요.\n6. 자료에 답이 없으면 현재 가이드에서 확인되지 않는다고 말하세요.\n7. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요.\n8. 자료가 충돌하면 실시간 Notion 자료를 우선하되, 연도·공문 충돌이면 최신 공문·해당 학년도 지침 확인 필요성을 알리세요.\n9. 교직원이 바로 읽을 수 있도록 간결하게 답하세요. 중요한 핵심어는 **굵게** 표시할 수 있습니다.\n10. 사람 이름, 학생 정보, 비밀번호, 개인정보, 인증서 정보를 불필요하게 노출하지 마세요.\n11. URL과 출처 목록은 답변 본문에 쓰지 마세요.\n12. 질문의 교직 용어 줄임말·띄어쓰기·구어체를 문맥으로 이해하세요. 예: 학폭=학교폭력, 생기부/학생부=학교생활기록부, 학운위=학교운영위원회, 창체=창의적 체험활동, 행특=행동특성 및 종합의견. 줄임말이라는 이유만으로 답변을 거절하지 마세요.\n13. 검색 확장어는 자료를 찾기 위한 힌트이며 사용자가 말한 사실이나 근거가 아닙니다. 원래 질문의 의도와 조건을 유지하세요. 약어의 뜻이 여러 가지이거나 맥락이 부족하면 필요한 확인 질문을 한 가지 하세요. 의미 해석과 제도·절차의 사실 확인을 구분하고, 자료에 없는 내용은 만들어내지 마세요.`;
     const {response,data}=await fetchJsonWithTimeout('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,instructions,input:`질문: ${question}\n\n검색 확장어: ${expandQuestion(question)}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,max_output_tokens:800})},OPENAI_TIMEOUT_MS,'AI 답변 생성 시간이 초과했습니다. 잠시 후 다시 시도해 주세요.');
     if(!response.ok)return res.status(502).json({error:data?.error?.message||`OpenAI API 오류 (${response.status})`});
     const answer=extractOutputText(data); if(!answer)return res.status(502).json({error:'AI 답변을 생성하지 못했습니다.'});
