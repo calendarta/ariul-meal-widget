@@ -189,7 +189,7 @@ async function verifyCandidatesLive(question,docs) {
   if(!token) return {docs,liveCount:0,liveAttempted:false};
   const candidates=uniqueCandidatePages(docs); if(!candidates.length) return {docs,liveCount:0,liveAttempted:false};
   const deadlineAt=Date.now()+NOTION_LIVE_BUDGET_MS, livePages=[];
-  for(const candidate of candidates){ if(Date.now()>=deadlineAt)break; try{livePages.push(await fetchLiveCandidate(candidate,token,deadlineAt));}catch(e){console.warn('live Notion verify failed:',candidate.title,e.message);} }
+  for(const candidate of candidates){ if(Date.now()>=deadlineAt)break; try{livePages.push(await fetchLiveCandidate(candidate,token,deadlineAt));}catch{console.warn('teacher_ai_notion_unavailable');} }
   if(!livePages.length) return {docs,liveCount:0,liveAttempted:true};
   const liveChunks=livePages.flatMap(page=>chunkPage(page));
   const verified=retrieve(question,[...liveChunks,...docs]);
@@ -198,20 +198,25 @@ async function verifyCandidatesLive(question,docs) {
 
 module.exports=async function handler(req,res) {
   res.setHeader('Cache-Control','no-store'); res.setHeader('Content-Type','application/json; charset=utf-8');
+  res.setHeader('X-Content-Type-Options','nosniff');
   if(req.method!=='POST')return res.status(405).json({error:'POST 요청만 지원합니다.'});
   try {
     const question=String(req.body?.question||'').trim();
     if(!question)return res.status(400).json({error:'질문을 입력해 주세요.'});
     if(question.length>500)return res.status(400).json({error:'질문은 500자 이내로 입력해 주세요.'});
-    const apiKey=String(process.env.OPENAI_API_KEY||'').trim(); if(!apiKey)return res.status(500).json({error:'OPENAI_API_KEY 환경변수가 설정되지 않았습니다.'});
+    if(req.body?.adultConfirmed!==true)return res.status(400).json({error:'성인 이용 대상과 개인정보 입력 금지 안내를 확인해 주세요.'});
+    // A limited safeguard, not a guarantee that every identifier can be detected.
+    const personalIdentifier=/(?:\d{6}\s*[-–]\s*[1-8]\d{6})|(?:01[016789][\s.-]?\d{3,4}[\s.-]?\d{4})|(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i;
+    if(personalIdentifier.test(question))return res.status(400).json({error:'연락처·이메일·주민등록번호 형태의 정보가 포함되어 있습니다. 개인정보를 지우고 일반적인 절차만 질문해 주세요.'});
+    const apiKey=String(process.env.OPENAI_API_KEY||'').trim(); if(!apiKey)return res.status(503).json({error:'AI 도우미를 준비 중입니다. 잠시 후 다시 시도하거나 문의처로 알려주세요.'});
     const snapshotDocs=retrieve(question,allChunks());
     if(!snapshotDocs.length||snapshotDocs[0].score<3)return res.status(200).json({answer:'현재 전입교원 가이드에서 이 질문에 대한 근거를 확인하지 못했습니다. 학교 담당 업무 또는 관리자에게 확인해 주세요.',sources:[],grounded:false,badges:[{type:'unknown',label:'가이드에서 확인되지 않음'}],syncMode:'snapshot-search',indexedPages:(SNAPSHOT.pages||[]).length,refreshedAt:SNAPSHOT.generatedAt||null,syncError:null});
     const verified=await verifyCandidatesLive(question,snapshotDocs), docs=verified.docs;
     const context=docs.map((doc,i)=>`[자료 ${i+1}] ${doc.title}${doc.sourceType==='notion-live'?' (Notion 실시간 확인)':''}\n${doc.text}`).join('\n\n---\n\n');
     const now=koreaDateParts();
     const instructions=`당신은 군산아리울초 전입교원 적응 가이드 전용 AI 도우미입니다.\n현재 날짜(대한민국 기준)는 ${now.year}년 ${now.month}월 ${now.day}일입니다.\n1. 제공된 [자료]에 명시된 내용만 근거로 답하세요. 추측하지 마세요.\n2. '(Notion 실시간 확인)' 자료가 있으면 같은 주제의 저장 스냅샷보다 그 내용을 우선하세요.\n3. 사용자가 '이번달', '이달', '이번 학기'처럼 상대적인 시기를 물으면 위 현재 날짜를 기준으로 해석하세요.\n4. 수당 질문에서는 '매월 지급되는 항목'과 '이번 달에 추가로 확인할 항목'을 구분하세요.\n5. 휴가 질문에서는 종류, 일수, 사용 조건, 증빙·주의사항이 자료에 있으면 함께 정리하세요.\n6. 자료에 답이 없으면 현재 가이드에서 확인되지 않는다고 말하세요.\n7. 2026 기준 자료를 2027 확정 정보처럼 표현하지 마세요.\n8. 자료가 충돌하면 실시간 Notion 자료를 우선하되, 연도·공문 충돌이면 최신 공문·해당 학년도 지침 확인 필요성을 알리세요.\n9. 교직원이 바로 읽을 수 있도록 간결하게 답하세요. 중요한 핵심어는 **굵게** 표시할 수 있습니다.\n10. 사람 이름, 학생 정보, 비밀번호, 개인정보, 인증서 정보를 불필요하게 노출하지 마세요.\n11. URL과 출처 목록은 답변 본문에 쓰지 마세요.\n12. 질문의 교직 용어 줄임말·띄어쓰기·구어체를 문맥으로 이해하세요. 예: 학폭=학교폭력, 생기부/학생부=학교생활기록부, 학운위=학교운영위원회, 창체=창의적 체험활동, 행특=행동특성 및 종합의견. 줄임말이라는 이유만으로 답변을 거절하지 마세요.\n13. 검색 확장어는 자료를 찾기 위한 힌트이며 사용자가 말한 사실이나 근거가 아닙니다. 원래 질문의 의도와 조건을 유지하세요. 약어의 뜻이 여러 가지이거나 맥락이 부족하면 필요한 확인 질문을 한 가지 하세요. 의미 해석과 제도·절차의 사실 확인을 구분하고, 자료에 없는 내용은 만들어내지 마세요.`;
-    const {response,data}=await fetchJsonWithTimeout('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,instructions,input:`질문: ${question}\n\n검색 확장어: ${expandQuestion(question)}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,max_output_tokens:800})},OPENAI_TIMEOUT_MS,'AI 답변 생성 시간이 초과했습니다. 잠시 후 다시 시도해 주세요.');
-    if(!response.ok)return res.status(502).json({error:data?.error?.message||`OpenAI API 오류 (${response.status})`});
+    const {response,data}=await fetchJsonWithTimeout('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,instructions,input:`질문: ${question}\n\n검색 확장어: ${expandQuestion(question)}\n\n검색된 전입교원 가이드 자료:\n\n${context}`,max_output_tokens:800})},OPENAI_TIMEOUT_MS,'AI 답변 생성 시간이 초과했습니다. 잠시 후 다시 시도해 주세요.');
+    if(!response.ok)return res.status(502).json({error:'AI 답변을 생성하지 못했습니다. 잠시 후 다시 시도하거나 문의처로 알려주세요.'});
     const answer=extractOutputText(data); if(!answer)return res.status(502).json({error:'AI 답변을 생성하지 못했습니다.'});
     const sources=uniqueSources(docs), statuses=new Set(sources.map(s=>s.status)), badges=[];
     if(verified.liveCount>0)badges.push({type:'current',label:'Notion 실시간 확인'});
@@ -219,5 +224,5 @@ module.exports=async function handler(req,res) {
     if(statuses.has('year-2026')||statuses.has('confirm-2027'))badges.push({type:'year-2026',label:'2026 자료 기준 포함'});
     if(!badges.length)badges.push({type:'current',label:'가이드 근거 확인'});
     return res.status(200).json({answer,sources,grounded:true,badges,syncMode:verified.liveCount>0?'notion-live-verified':'snapshot-fallback',indexedPages:(SNAPSHOT.pages||[]).length,refreshedAt:SNAPSHOT.generatedAt||null,syncError:verified.liveAttempted&&verified.liveCount===0?'Notion 실시간 확인 실패':null,model:MODEL,livePages:verified.liveCount});
-  } catch(error){ console.error('teacher ai error:',error); return res.status(500).json({error:error instanceof Error?error.message:'AI 도우미 처리 중 오류가 발생했습니다.'}); }
+  } catch { console.error('teacher_ai_request_failed'); return res.status(500).json({error:'AI 도우미 처리 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 문의처로 알려주세요.'}); }
 };

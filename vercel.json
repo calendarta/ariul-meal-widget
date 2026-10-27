@@ -1,11 +1,44 @@
 {
   "version": 2,
   "functions": {
-    "api/meal.js": { "maxDuration": 10 },
-    "api/teacher-ai.js": { "maxDuration": 30 }
+    "api/meal.js": {
+      "maxDuration": 10
+    },
+    "api/teacher-ai.js": {
+      "maxDuration": 30
+    }
   },
   "rewrites": [
-    { "source": "/", "destination": "/index.html" },
-    { "source": "/teacher-ai", "destination": "/teacher-ai.html" }
+    {
+      "source": "/",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/teacher-ai",
+      "destination": "/teacher-ai.html"
+    },
+    {
+      "source": "/teacher-ai-privacy",
+      "destination": "/teacher-ai-privacy.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/teacher-ai(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        }
+      ]
+    }
   ]
 }
