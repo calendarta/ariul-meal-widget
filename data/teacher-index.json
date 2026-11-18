@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-17T21:07:48.286Z",
+  "generatedAt": "2026-11-18T07:44:04.778Z",
   "rootPageId": "3c9a0cffdadd8091b962caa4ac112d53",
   "pageCount": 250,
   "pages": [
@@ -667,13 +667,6 @@
       "url": "https://app.notion.com/p/3d5a0cffdadd81e18b91fcfadecff5dc",
       "text": "",
       "lastEdited": "2026-09-08T01:31:00.000Z"
-    },
-    {
-      "id": "3d2a0cff-dadd-81b1-8afe-eb44c0fea0bf",
-      "title": "웨일북·웨일스페이스",
-      "url": "https://app.notion.com/p/3d2a0cffdadd81b18afeeb44c0fea0bf",
-      "text": "",
-      "lastEdited": "2026-09-06T09:44:00.000Z"
     },
     {
       "id": "3d2a0cff-dadd-8183-a197-d0e384785cc1",
@@ -1751,6 +1744,13 @@
       "title": "전출생 생기부 마감, 전출관리 흐름도",
       "url": "https://app.notion.com/p/410a0cffdadd818ebf29e70f5fad22c0",
       "text": "안내: 기존 업무 안내에 수록된 영상입니다. 제작 당시 화면·제도 기준이므로 해당 학년도 지침·학교급·권한을 함께 확인합니다.\n첨부자료: [나이스 신규교사]전출생 생기부 마감, 전출관리 흐름도 · 전북미래교육연구원\n전입 전출 학생 발생 시\n기존 영상 묶음: 🎬 전출생 마감·전출 흐름·통폐합 일괄 전출 · 2편",
+      "lastEdited": "2026-11-06T04:34:00.000Z"
+    },
+    {
+      "id": "410a0cff-dadd-8191-b45c-de44ed218ff3",
+      "title": "부장교사, 담임교사 수당 지급 근거, 나이스 어디서 설정할까요?",
+      "url": "https://app.notion.com/p/410a0cffdadd8191b45cde44ed218ff3",
+      "text": "안내: 기존 업무 안내에 수록된 영상입니다. 제작 당시 화면·제도 기준이므로 해당 학년도 지침·학교급·권한을 함께 확인합니다.\n첨부자료: [나이스 교원인사] 부장교사, 담임교사 수당 지급 근거, 나이스 어디서 설정할까요? · 2:46 · 전북미래교육연구원\n급여·수당\n기존 영상 묶음: 🎬 담임·보직 수당의 인사 설정 · 1편",
       "lastEdited": "2026-11-06T04:34:00.000Z"
     }
   ]
